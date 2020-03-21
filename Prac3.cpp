@@ -77,6 +77,8 @@ void Master()
  printf("0: We have %d processors\n", numprocs);
  for (int j = 1; j <= slaves; j++)
  {
+  // ACK Value
+  int ack[1];
   // Start Row for Slave
   int ystart = (j-1) * Input.Height / slaves;
   // End Row for Slave
@@ -85,24 +87,33 @@ void Master()
   int numrows = yend - ystart + 1;
   // Number of Image Rows Needed for Filter
   int windowrows = numrows + windowsize - 1;
-  JSAMPLE **NewRows = new JSAMPLE *[windowrows];
+  // Send Buffer
+  char buffer[windowrows][Input.Width*Input.Components];
   
   int cnt = 0;
   for (int i = ystart - (windowsize / 2); i < yend + (windowsize / 2); i++)
   {
-   NewRows[cnt] = new JSAMPLE[Input.Width * Input.Components];
-   //printf("Allocating\n");
-   if (i < 0 || i > Input.Height)
+   if (i < 0 || i >= Input.Height)
    {
-    NewRows[cnt] = nullptr;
-    cnt++;
+    for (int j = 0; j < Input.Width * Input.Components; j += 3)
+    {
+     buffer[cnt][j + 0] = 0;
+     buffer[cnt][j + 1] = 0;
+     buffer[cnt][j + 2] = 0;
+    }
    }
    else
    {
-    NewRows[cnt] = Input.Rows[i];
-    cnt++;
+    for (int j = 0; j < Input.Width*Input.Components; j += 3)
+    {
+     buffer[cnt][j + 0] = Input.Rows[i][j + 0];
+     buffer[cnt][j + 1] = Input.Rows[i][j + 1];
+     buffer[cnt][j + 2] = Input.Rows[i][j + 2];
+    }
    }
+    cnt++;
   }
+  printf("Allocated \n");
   int info[7];
   info[0] = windowsize;
   info[1] = windowrows;
@@ -111,11 +122,14 @@ void Master()
   info[4] = Input.Components;
   info[5] = ystart;
   info[6] = yend;
+  // Send Parameters
   MPI_Send(info, 7, MPI_INT, j, TAG, MPI_COMM_WORLD);
-  for (int AH = 0; AH < windowrows; AH++)
-  {
-   MPI_Send(&NewRows[AH], Input.Width*Input.Components, MPI_INT, j, TAG, MPI_COMM_WORLD);
-  }
+  // Receive ACK
+  MPI_Recv(ack, 1, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
+  // Send Data
+  MPI_Send(buffer, windowrows*Input.Width*Input.Components, MPI_CHAR, j, TAG, MPI_COMM_WORLD);
+  // Receive ACK
+  MPI_Recv(ack, 1, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
   printf("Sent\n");
  }
 
@@ -129,28 +143,26 @@ void Master()
   int yend=rec_info[1];
   int numrows=rec_info[2];
   printf("Received %d \n", j);
-  JSAMPLE **received = new JSAMPLE *[numrows];
-  for (int z = 0; z < numrows; z++)
-  {
-   received[z] = new JSAMPLE[Input.Width * Input.Components];
-  }
-  for (int plswork = 0; plswork < numrows; plswork++)
-  {
-   MPI_Recv(&received[plswork][0], Input.Width*Input.Components, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
-  }
+  char output[numrows][Input.Width*Input.Components];
+  MPI_Recv(output, numrows*Input.Width*Input.Components, MPI_CHAR, j, TAG, MPI_COMM_WORLD, &stat);
   printf("Received again %d \n", j);
-  int dummy = 0;
+  int cnt = 0;
   printf("ys %d ye %d \n", ystart, yend);
-  for (int i = ystart; i <= yend; i++)
+  for (int i = ystart; i < yend; i++)
   {
-   Output.Rows[i] = received[dummy];
-   dummy++;
-   //printf("did a thing? \n");
+   //printf("Saving \n");
+   for (int j = 0; j < Input.Width * Input.Components; j ++)
+   {
+    Output.Rows[i][j] = output[cnt][j];
+    //Output.Rows[i][j + 1] = output[cnt][j + 1];
+    //Output.Rows[i][j + 2] = output[cnt][j + 2];
+   }
+   cnt++;
   }
   printf("done ?? \n");
  }
  // Write the output image
- if (!Output.Write("Data/Output.jpg"))
+ if (!Output.Write("Data/Output2.jpg"))
  {
   printf("Cannot write image\n");
   return;
@@ -190,113 +202,61 @@ void Slave(int ID){
  components = info[4];
  ystart = info[5];
  yend = info[6];
- JSAMPLE** data = new JSAMPLE*[windowrows];
- for (int z = 0; z < windowrows; z++)
- {
-  data[z] = new JSAMPLE[width * components];
- }
 
- for (int BRUH = 0; BRUH < windowrows; BRUH++)
- {
-  MPI_Recv(&data[BRUH][0], width*components, MPI_INT, 0, TAG, MPI_COMM_WORLD, &stat);
- }
-
+ char in[windowrows][width*components];
+ char out[numrows][width*components];
+ // Send ACK
+ MPI_Send(info, 1, MPI_INT, 0, TAG, MPI_COMM_WORLD);
+ // Receive Data
+ MPI_Recv(in, windowrows*width*components, MPI_CHAR, 0, TAG, MPI_COMM_WORLD, &stat);
+ // Send ACK
+ MPI_Send(info, 1, MPI_INT, 0, TAG, MPI_COMM_WORLD);
  printf("Got Data\n");
- /*
- for (int i = 10; i < 12; i++)
- {
-  for (int j = 0; j < width * components; j++)
-  {
-   printf("out %d = %d \n", j, data[i][j]);
-  }
- }
- */
- // Output Buffer
- JSAMPLE **output = new JSAMPLE *[numrows];
- for (int z = 0; z < numrows; z++)
- {
-  output[z] = new JSAMPLE[width * components];
- }
+
  // Filter Data with Multiple Components
- for (int y = windowsize/2; y < windowsize/2 + numrows; y++)
+ int r = 0;
+ for (int y = windowsize / 2; y < windowsize / 2 + numrows; y++)
+ {
+  //printf("y %d \n", y);
+  for (int x = 0; x < width * components; x++)
   {
-   int r = 0;
-   //printf("y %d \n", y);
-   for (int x = 0; x < width; x++)
+   int window[windowsize * windowsize];
+   int cnt = 0;
+   for (int i = y - windowsize / 2; i <= y + windowsize / 2; i++)
    {
-    //printf("x %d \n", x);
-    for (int c = 0; c < components; c++)
+    for (int j = x - components; j <= x + components; j = j + components)
     {
-     //printf("c %d \n", c);
-     int window[windowsize * windowsize];
-     int cnt = 0;
-     for (int i = y - windowsize/2; i <= y + windowsize/2; i++)
+     //printf("j %d \n", j);
+     if (j < 0 || j > width * components)
      {
-      for (int j = x - (windowsize/2)*components + c; j <= x + (windowsize/2)*components + c; j+=components)
-      {
-       //printf("j %d \n", j);
-       if (j < 0 || j > width*components)
-       {
-        window[cnt] = 0;
-        //printf("window %d %d is %d \n", window[cnt]);
-       }
-       else
-       {
-        //printf("grrrr \n");
-        window[cnt] = data[i][j];
-        //printf("window %d %d is %d \n", i, j, window[cnt]);
-       }
-       cnt++;
-      }
+      window[cnt] = 0;
+      //printf("window is %d \n", window[cnt]);
      }
-     int m = median(window, windowsize*windowsize);
-     //printf("m = %d \n", m);
-     output[r][components*x + c] = m;
+     else
+     {
+      //printf("grrrr \n");
+      window[cnt] = in[i][j];
+      //printf("window is %d \n", window[cnt]);
+     }
+     cnt++;
     }
    }
-   r++;
+   int m = median(window, windowsize * windowsize);
+   printf("out %d %d, m = %d \n", r, components * x, m);
+   out[r][x] = m;
   }
-
+  r++;
+ }
  printf("Done processing \n");
  // send to rank 0 (master):
- int out[3];
- out[0] = ystart;
- out[1] = yend;
- out[2] = numrows;
+ int par[3];
+ par[0] = ystart;
+ par[1] = yend;
+ par[2] = numrows;
  printf("why %d \n", ystart);
- MPI_Send(out, 3, MPI_INT, 0, TAG, MPI_COMM_WORLD);
- //printf("why \n");
- //MPI_Send(&yend, 1, MPI_INT, 0, TAG, MPI_COMM_WORLD);
- //printf("why \n");
- //MPI_Send(&numrows, 1, MPI_INT, 0, TAG, MPI_COMM_WORLD);
- //printf("Slave sent %p\n", &output[44][90]);
- for (int GRR = 0; GRR < numrows; GRR++)
- {
-  printf("meow \n");
-  MPI_Send(&output[GRR], width*components, MPI_INT, 0, TAG, MPI_COMM_WORLD);
- }
-
+ MPI_Send(par, 3, MPI_INT, 0, TAG, MPI_COMM_WORLD);
+ MPI_Send(out, numrows*width*components, MPI_CHAR, 0, TAG, MPI_COMM_WORLD);
  printf("Slave sent again\n");
- /*
- if (output)
- {
-  for (int j = 0; j < numrows; j++)
-  {
-   if (output[j])
-    delete[] output[j];
-  }
-  delete[] output;
- }
- if (data)
- {
-  for (int j = 0; j < windowrows; j++)
-  {
-   if (data[j])
-    delete[] data[j];
-  }
-  delete[] data;
- }
- */
 }
 //------------------------------------------------------------------------------
 
