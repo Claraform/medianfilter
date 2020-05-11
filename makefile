@@ -10,14 +10,15 @@ OBJS = obj/*
 
 # Which compiler to use, note for MPI a special purpose compiler is used
 CC = mpic++
+CC2 = g++
 
 # Precompiled libraries to link in:
 LDLIBS  = -L/usr/lib/openmpi/lib -L/usr/lib -lm -ljpeg -lmpi
 # Included H files needed during compiling:
 INCLUDE = -ITools -I/usr/lib/openmpi/include
 
-.PHONY: clean Prac3 run
-all:    clean Prac3 run
+.PHONY: clean Prac3 
+all:    clean Prac3 
 
 clean:
 	rm -f -r $(PROG) $(OBJS)
@@ -28,9 +29,16 @@ Prac3:
 	$(CC) $(INCLUDE) -c Tools/Timer.cpp -o obj/Timer.o
 	$(CC) -o bin/Prac3 obj/Prac3.o obj/JPEG.o obj/Timer.o $(LDLIBS)
 
+Sequential:
+	$(CC2) $(INCLUDE) -c Sequential.cpp -o obj/Sequential.o
+	$(CC2) $(INCLUDE) -c Tools/JPEG.cpp -o obj/JPEG.o
+	$(CC2) $(INCLUDE) -c Tools/Timer.cpp -o obj/Timer.o
+	$(CC2) -o bin/Sequential obj/Sequential.o obj/JPEG.o obj/Timer.o $(LDLIBS)
+
+
 # you can type "make run" to execute the program in this case with a default of 5 nodes
 run:
-	mpirun -np 2 bin/Prac3
+	mpirun -np 4 bin/Prac3
 
 doxy: Prac3.cpp
 	doxygen Prac3.doxy

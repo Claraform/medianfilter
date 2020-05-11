@@ -58,10 +58,10 @@ void Master()
  // The above outputs a heading to doxygen function entry
  MPI_Status stat;    //! stat: Status of the MPI application
  int flag = 0;        //! flag: Flag for message availability
- int windowsize = 3; //! windowsize: Size of filter window
+ int windowsize = 9; //! windowsize: Size of filter window
 
  // Read the input image
- if (!Input.Read("Data/small.jpg"))
+ if (!Input.Read("Data/fly.jpg"))
  {
   printf("Cannot read image\n");
   return;
@@ -73,8 +73,8 @@ void Master()
 
  // Number of Slaves
  int slaves = numprocs - 1;
-
- printf("0: We have %d processors\n", numprocs);
+ tic();
+ 
  for (int j = 1; j <= slaves; j++)
  {
   // ACK Value
@@ -82,38 +82,35 @@ void Master()
   // Start Row for Slave
   int ystart = (j-1) * Input.Height / slaves;
   // End Row for Slave
-  int yend = Input.Height / slaves + ystart;
+  int yend = ceil((float)Input.Height / slaves + ystart);
+  //printf("ys %d ye %d \n", ystart, yend);
   // Number of Image Rows in Partition
   int numrows = yend - ystart + 1;
   // Number of Image Rows Needed for Filter
   int windowrows = numrows + windowsize - 1;
   // Send Buffer
   char buffer[windowrows][Input.Width*Input.Components];
-  
+  // Partition Data
   int cnt = 0;
   for (int i = ystart - (windowsize / 2); i < yend + (windowsize / 2); i++)
   {
    if (i < 0 || i >= Input.Height)
    {
-    for (int j = 0; j < Input.Width * Input.Components; j += 3)
+    for (int j = 0; j < Input.Width * Input.Components; j ++)
     {
-     buffer[cnt][j + 0] = 0;
-     buffer[cnt][j + 1] = 0;
-     buffer[cnt][j + 2] = 0;
+     buffer[cnt][j] = 0;
     }
    }
    else
    {
-    for (int j = 0; j < Input.Width*Input.Components; j += 3)
+    for (int j = 0; j < Input.Width*Input.Components; j ++)
     {
-     buffer[cnt][j + 0] = Input.Rows[i][j + 0];
-     buffer[cnt][j + 1] = Input.Rows[i][j + 1];
-     buffer[cnt][j + 2] = Input.Rows[i][j + 2];
+     buffer[cnt][j] = Input.Rows[i][j];
     }
    }
     cnt++;
   }
-  printf("Allocated \n");
+
   int info[7];
   info[0] = windowsize;
   info[1] = windowrows;
@@ -122,7 +119,7 @@ void Master()
   info[4] = Input.Components;
   info[5] = ystart;
   info[6] = yend;
-  // Send Parameters
+  // Send Information and Data Size
   MPI_Send(info, 7, MPI_INT, j, TAG, MPI_COMM_WORLD);
   // Receive ACK
   MPI_Recv(ack, 1, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
@@ -130,52 +127,48 @@ void Master()
   MPI_Send(buffer, windowrows*Input.Width*Input.Components, MPI_CHAR, j, TAG, MPI_COMM_WORLD);
   // Receive ACK
   MPI_Recv(ack, 1, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
-  printf("Sent\n");
  }
-
+ // Receive Slave Data
  for (int j = 1; j <= slaves; j++)
  {
-  printf("Master waiting \n");
+  // Receive Size of Slave Data
   int rec_info[3];
   MPI_Recv(rec_info, 3, MPI_INT, j, TAG, MPI_COMM_WORLD, &stat);
-  printf("got \n");
   int ystart=rec_info[0];
   int yend=rec_info[1];
   int numrows=rec_info[2];
-  printf("Received %d \n", j);
+  // Receive Data
   char output[numrows][Input.Width*Input.Components];
   MPI_Recv(output, numrows*Input.Width*Input.Components, MPI_CHAR, j, TAG, MPI_COMM_WORLD, &stat);
-  printf("Received again %d \n", j);
+  
+  // Save Received Data to Output
   int cnt = 0;
-  printf("ys %d ye %d \n", ystart, yend);
   for (int i = ystart; i < yend; i++)
   {
-   //printf("Saving \n");
    for (int j = 0; j < Input.Width * Input.Components; j ++)
    {
     Output.Rows[i][j] = output[cnt][j];
-    //Output.Rows[i][j + 1] = output[cnt][j + 1];
-    //Output.Rows[i][j + 2] = output[cnt][j + 2];
    }
    cnt++;
   }
-  printf("done ?? \n");
  }
+ 
  // Write the output image
- if (!Output.Write("Data/Output2.jpg"))
+ if (!Output.Write("Data/Output.jpg"))
  {
   printf("Cannot write image\n");
   return;
  }
- printf("he wrote? \n");
+ printf("Image Written \n");
+ printf("MPI Time = %lg ms\n", (double)toc() / 1e-3);
  //! <h3>Output</h3> The file Output.jpg will be created on success to save
  //! the processed output.
 }
-
+// Compare Function for Quicksort
 int compare(int* i,int* j) { return (*i>*j); }
+// Median Function
 int median(int* window, int size)
 {
- //printf("Median \n");
  qsort(window,size,sizeof(int),(int (*)(const void*,const void*))compare);
  return window[size/2];
 }
@@ -190,11 +183,10 @@ void Slave(int ID){
  int components;
  int ystart;
  int yend;
- printf("Slave\n");
+ //printf("Slave %d Activated \n", ID);
 
- // Receiver data
+ // Receive Data Size from Master
  MPI_Recv(info, 7, MPI_INT, 0, TAG, MPI_COMM_WORLD, &stat);
- printf("Got size\n");
  windowsize = info[0];
  windowrows = info[1];
  numrows = info[2];
@@ -211,52 +203,47 @@ void Slave(int ID){
  MPI_Recv(in, windowrows*width*components, MPI_CHAR, 0, TAG, MPI_COMM_WORLD, &stat);
  // Send ACK
  MPI_Send(info, 1, MPI_INT, 0, TAG, MPI_COMM_WORLD);
- printf("Got Data\n");
+ //printf("Slave %d Received from Master \n", ID);
 
- // Filter Data with Multiple Components
+ // Filter Data
  int r = 0;
  for (int y = windowsize / 2; y < windowsize / 2 + numrows; y++)
  {
-  //printf("y %d \n", y);
   for (int x = 0; x < width * components; x++)
   {
    int window[windowsize * windowsize];
    int cnt = 0;
    for (int i = y - windowsize / 2; i <= y + windowsize / 2; i++)
    {
-    for (int j = x - components; j <= x + components; j = j + components)
+    for (int j = x-components*(windowsize/2); j <= x+components*(windowsize/2); j = j + components)
     {
-     //printf("j %d \n", j);
-     if (j < 0 || j > width * components)
+     if (j < 0 || j >= width * components)
      {
       window[cnt] = 0;
-      //printf("window is %d \n", window[cnt]);
      }
      else
      {
-      //printf("grrrr \n");
       window[cnt] = in[i][j];
-      //printf("window is %d \n", window[cnt]);
      }
      cnt++;
     }
    }
    int m = median(window, windowsize * windowsize);
-   printf("out %d %d, m = %d \n", r, components * x, m);
    out[r][x] = m;
   }
   r++;
  }
- printf("Done processing \n");
+
  // send to rank 0 (master):
  int par[3];
  par[0] = ystart;
  par[1] = yend;
  par[2] = numrows;
- printf("why %d \n", ystart);
+ // Send Data Size to Master
  MPI_Send(par, 3, MPI_INT, 0, TAG, MPI_COMM_WORLD);
+ // Send Data to Master
  MPI_Send(out, numrows*width*components, MPI_CHAR, 0, TAG, MPI_COMM_WORLD);
- printf("Slave sent again\n");
+ //printf("Slave %d Sent to Master\n", ID);
 }
 //------------------------------------------------------------------------------
 
@@ -276,11 +263,13 @@ int main(int argc, char** argv){
  // At this point, all programs are running equivalently, the rank
  // distinguishes the roles of the programs, with
  // rank 0 often used as the "master".
+ 
  if(myid == 0) Master();
  else          Slave (myid);
-
+ 
  // MPI programs end with MPI_Finalize
  MPI_Finalize();
+ 
  return 0;
 }
 //------------------------------------------------------------------------------

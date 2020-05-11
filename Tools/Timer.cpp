@@ -56,7 +56,7 @@ void tic(){
   if(First){
    clock_getres(CLOCK_MONOTONIC, &Time);
    Start = (double)(Time.tv_sec) + (double)(Time.tv_nsec)*1e-9;
-   printf("Clock resolution: %lg ns\n", Start*1e9);
+   //printf("Clock resolution: %lg ns\n", Start*1e9);
    First = false;
   }
   clock_gettime(CLOCK_MONOTONIC, &Time);
